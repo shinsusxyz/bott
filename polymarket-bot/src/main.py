@@ -207,15 +207,16 @@ async def main() -> int:
     """Main entry point."""
     bot = PolymarketAlertBot()
 
-    # Setup signal handlers for graceful shutdown
-    loop = asyncio.get_running_loop()
+    # Setup signal handlers for graceful shutdown (Unix only)
+    if sys.platform != "win32":
+        loop = asyncio.get_running_loop()
 
-    def signal_handler() -> None:
-        logger.info("Received shutdown signal")
-        asyncio.create_task(bot.stop())
+        def signal_handler() -> None:
+            logger.info("Received shutdown signal")
+            asyncio.create_task(bot.stop())
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, signal_handler)
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, signal_handler)
 
     # Start and run
     if not await bot.start():
@@ -224,7 +225,7 @@ async def main() -> int:
 
     try:
         await bot.run_forever()
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("Bot cancelled")
     finally:
         await bot.stop()
@@ -234,7 +235,11 @@ async def main() -> int:
 
 def run() -> None:
     """Entry point for console script."""
-    sys.exit(asyncio.run(main()))
+    try:
+        sys.exit(asyncio.run(main()))
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
