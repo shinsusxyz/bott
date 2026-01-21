@@ -1,0 +1,10 @@
+# Polymarket Low Odds Alert Bot Dependencies
+
+# Async HTTP client
+aiohttp>=3.9.0,<4.0.0
+
+# Telegram bot (async mode)
+python-telegram-bot>=21.0,<22.0
+
+# Environment variables
+python-dotenv>=1.0.0,<2.0.0
