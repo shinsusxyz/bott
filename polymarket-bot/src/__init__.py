@@ -1,1 +1,1 @@
-# Polymarket Low Odds Alert Bot
+# Polymarket Smart Alert Bot

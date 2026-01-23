@@ -1,213 +1,256 @@
 #!/usr/bin/env python3
 """
-Polymarket Low Odds Alert Bot
+Polymarket Smart Alert Bot
 
-Monitors Polymarket for markets where any outcome has odds ≤ 0.1% (≤ $0.001)
-and sends instant alerts via Telegram.
+A powerful Telegram bot that monitors Polymarket for:
+- Low odds markets (< 1%)
+- Whale trades (> $30)
+- Arbitrage opportunities
+- Counter-signals
 """
 
 import asyncio
-import logging
 import signal
 import sys
-import time
+from datetime import datetime, timezone
 from typing import Any
 
-from .alert_cache import AlertCache
-from .config import (
-    SCAN_INTERVAL_SECONDS,
-    PRICE_THRESHOLD,
+from telegram import Bot
+from telegram.ext import Application
+
+from .polymarket.gamma_client import GammaClient
+from .polymarket.clob_client import CLOBClient
+from .polymarket.data_client import DataClient
+from .core.scanner import MarketScanner, WhaleScanner
+from .core.aggregator import AlertAggregator
+from .data.database import Database
+from .bot.handlers import setup_handlers
+from .bot.formatters import format_batch
+from .bot.keyboards import alert_actions_keyboard, whale_alert_keyboard
+from .utils.config import (
     TELEGRAM_BOT_TOKEN,
-    TELEGRAM_CHAT_ID,
+    DEFAULT_SCAN_INTERVAL,
 )
-from .filters import filter_markets, FilterResult
-from .polymarket_client import PolymarketClient, Market
-from .telegram_bot import TelegramAlertBot
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
+from .utils.logger import logger
 
 
-class PolymarketAlertBot:
-    """Main bot class orchestrating all components."""
+class PolymarketBot:
+    """Main bot orchestrator."""
 
     def __init__(self) -> None:
-        self.polymarket = PolymarketClient()
-        self.telegram = TelegramAlertBot()
-        self.cache = AlertCache()
+        # API clients
+        self.gamma = GammaClient()
+        self.clob = CLOBClient()
+        self.data_client = DataClient()
 
+        # Database
+        self.db = Database()
+
+        # Scanners
+        self.market_scanner: MarketScanner | None = None
+        self.whale_scanner: WhaleScanner | None = None
+
+        # Alert aggregator
+        self.aggregator = AlertAggregator(batch_interval_seconds=60)
+
+        # Telegram
+        self.app: Application | None = None
+        self.bot: Bot | None = None
+
+        # State
         self._running = False
         self._stats = {
+            "start_time": None,
             "total_scans": 0,
-            "total_markets_scanned": 0,
-            "total_alerts_sent": 0,
-            "session_alerts_sent": 0,
-            "last_scan_time_ms": 0,
-            "errors": 0,
+            "total_alerts": 0,
         }
 
     async def start(self) -> bool:
-        """
-        Initialize all components.
+        """Initialize all components."""
+        logger.info("Starting Polymarket Smart Alert Bot...")
 
-        Returns:
-            True if all components initialized successfully
-        """
-        logger.info("Starting Polymarket Low Odds Alert Bot...")
-
-        # Validate configuration
-        if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-            logger.error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set")
+        if not TELEGRAM_BOT_TOKEN:
+            logger.error("TELEGRAM_BOT_TOKEN not set")
             return False
 
-        # Initialize Polymarket client
-        await self.polymarket.start()
-        logger.info("Polymarket client initialized")
+        try:
+            # Initialize database
+            await self.db.connect()
 
-        # Initialize Telegram bot
-        if not await self.telegram.start():
-            logger.error("Failed to initialize Telegram bot")
+            # Initialize API clients
+            await self.gamma.start()
+            await self.clob.start()
+            await self.data_client.start()
+
+            # Initialize scanners
+            self.market_scanner = MarketScanner(
+                self.gamma, self.clob, self.data_client, self.db
+            )
+            self.whale_scanner = WhaleScanner(
+                self.data_client, self.gamma, self.db
+            )
+
+            # Initialize Telegram bot
+            self.app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+            self.bot = self.app.bot
+
+            # Setup handlers
+            setup_handlers(self.app, self.db, self)
+
+            # Initialize the application
+            await self.app.initialize()
+            await self.app.start()
+            await self.app.updater.start_polling(drop_pending_updates=True)
+
+            self._running = True
+            self._stats["start_time"] = datetime.now(timezone.utc)
+
+            logger.info("Bot started successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to start bot: {e}")
             return False
-
-        # Send startup message
-        await self.telegram.send_startup_message()
-
-        self._running = True
-        logger.info("Bot started successfully")
-        return True
 
     async def stop(self) -> None:
         """Gracefully stop all components."""
         logger.info("Stopping bot...")
         self._running = False
 
-        await self.polymarket.close()
-        await self.telegram.close()
+        if self.app:
+            await self.app.updater.stop()
+            await self.app.stop()
+            await self.app.shutdown()
+
+        await self.gamma.close()
+        await self.clob.close()
+        await self.data_client.close()
+        await self.db.close()
 
         logger.info("Bot stopped")
 
-    async def run_scan_cycle(self) -> None:
-        """Execute a single scan cycle."""
-        start_time = time.time()
-
-        try:
-            # Fetch all active markets
-            logger.debug("Fetching active markets...")
-            markets = await self.polymarket.fetch_all_active_markets()
-
-            if not markets:
-                logger.warning("No markets fetched")
-                return
-
-            self._stats["total_markets_scanned"] += len(markets)
-
-            # Apply filters
-            logger.debug(f"Filtering {len(markets)} markets...")
-            filtered = filter_markets(markets)
-
-            # Process alerts
-            alerts_sent = 0
-            for market, result in filtered:
-                alerts_sent += await self._process_alert(market, result)
-
-            self._stats["total_alerts_sent"] += alerts_sent
-            self._stats["session_alerts_sent"] += alerts_sent
-            self._stats["total_scans"] += 1
-
-        except Exception as e:
-            logger.error(f"Error in scan cycle: {e}")
-            self._stats["errors"] += 1
-        finally:
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            self._stats["last_scan_time_ms"] = elapsed_ms
-            logger.info(
-                f"Scan completed: {len(markets) if 'markets' in dir() else 0} markets, "
-                f"{alerts_sent if 'alerts_sent' in dir() else 0} alerts, "
-                f"{elapsed_ms}ms"
-            )
-
-    async def _process_alert(self, market: Market, result: FilterResult) -> int:
-        """
-        Process a market that passed filters and send alerts.
-
-        Args:
-            market: The market to alert on
-            result: Filter result with low odds outcomes
-
-        Returns:
-            Number of alerts sent
-        """
-        if not result.low_odds_outcomes:
-            return 0
-
-        alerts_sent = 0
-
-        for outcome in result.low_odds_outcomes:
-            # Check deduplication cache
-            if self.cache.was_recently_alerted(market.id, outcome.name):
-                logger.debug(
-                    f"Skipping duplicate alert for {market.id}:{outcome.name}"
-                )
-                continue
-
-            # Send alert
-            logger.info(
-                f"Sending alert: {market.question[:50]}... "
-                f"- {outcome.name} @ {outcome.price:.4f}"
-            )
-
-            success = await self.telegram.send_alert(
-                market=market,
-                outcome=outcome,
-                category=result.category
-            )
-
-            if success:
-                # Record in cache
-                self.cache.record_alert(
-                    market_id=market.id,
-                    outcome_name=outcome.name,
-                    price=outcome.price
-                )
-                alerts_sent += 1
-            else:
-                logger.warning(f"Failed to send alert for {market.id}")
-
-        return alerts_sent
-
-    async def run_forever(self) -> None:
-        """Run the bot continuously."""
-        logger.info(
-            f"Starting continuous monitoring "
-            f"(interval: {SCAN_INTERVAL_SECONDS}s, threshold: {PRICE_THRESHOLD})"
-        )
+    async def run_scan_loop(self) -> None:
+        """Main scanning loop."""
+        logger.info(f"Starting scan loop (interval: {DEFAULT_SCAN_INTERVAL}s)")
 
         while self._running:
-            await self.run_scan_cycle()
+            try:
+                await self._run_scan_cycle()
+            except Exception as e:
+                logger.error(f"Scan cycle error: {e}")
 
-            # Wait for next cycle
             if self._running:
-                await asyncio.sleep(SCAN_INTERVAL_SECONDS)
+                await asyncio.sleep(DEFAULT_SCAN_INTERVAL)
+
+    async def _run_scan_cycle(self) -> None:
+        """Execute one scan cycle for all users."""
+        users = await self.db.get_all_users()
+
+        if not users:
+            logger.debug("No users to scan for")
+            return
+
+        for user_id in users:
+            try:
+                settings = await self.db.get_settings(user_id)
+
+                # Scan for price alerts
+                price_alerts = await self.market_scanner.scan_markets(user_id, settings)
+                for alert in price_alerts:
+                    if hasattr(alert, 'market'):  # PriceAlert
+                        await self.aggregator.add_price_alert(user_id, alert)
+                    elif hasattr(alert, 'yes_price'):  # ArbitrageAlert
+                        await self.aggregator.add_arbitrage_alert(user_id, alert)
+
+                # Scan for whale alerts
+                if settings.get("whale_alerts_enabled", True):
+                    whale_alerts = await self.whale_scanner.check_whale_trades(
+                        user_id,
+                        whale_threshold=settings.get("whale_threshold", 30),
+                        smart_money_only=settings.get("smart_money_only", False),
+                    )
+                    for alert in whale_alerts:
+                        await self.aggregator.add_whale_alert(user_id, alert)
+
+            except Exception as e:
+                logger.error(f"Error scanning for user {user_id}: {e}")
+
+        # Send ready batches
+        await self._send_ready_batches()
+
+        self._stats["total_scans"] += 1
+
+    async def _send_ready_batches(self) -> None:
+        """Send batched alerts to users."""
+        batches = await self.aggregator.get_ready_batches()
+
+        for user_id, batch in batches.items():
+            if batch.is_empty:
+                continue
+
+            try:
+                # Format the batch
+                message = format_batch(batch)
+
+                # Get keyboard for first alert (if any)
+                keyboard = None
+                if batch.price_alerts:
+                    market_id = batch.price_alerts[0].market.id
+                    keyboard = alert_actions_keyboard(market_id)
+                elif batch.whale_alerts:
+                    alert = batch.whale_alerts[0]
+                    keyboard = whale_alert_keyboard(
+                        alert.market.id if alert.market else "",
+                        alert.trade.trader_address,
+                    )
+
+                # Send
+                await self.bot.send_message(
+                    chat_id=user_id,
+                    text=message,
+                    reply_markup=keyboard,
+                    disable_web_page_preview=True,
+                )
+
+                self._stats["total_alerts"] += batch.total_count
+
+                # Record alerts in database
+                for alert in batch.price_alerts:
+                    await self.db.record_alert(
+                        user_id=user_id,
+                        alert_type="low_odds",
+                        market_id=alert.market.id,
+                        condition_id=alert.market.condition_id,
+                        event_slug=alert.market.event_slug,
+                        market_slug=alert.market.slug,
+                        title=alert.market.question,
+                        price_at_alert=alert.outcome.price,
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to send batch to {user_id}: {e}")
 
     def get_stats(self) -> dict[str, Any]:
-        """Get current statistics."""
+        """Get bot statistics."""
+        scanner_stats = self.market_scanner.get_stats() if self.market_scanner else {}
+
+        uptime = 0
+        if self._stats["start_time"]:
+            uptime = (datetime.now(timezone.utc) - self._stats["start_time"]).total_seconds()
+
         return {
             **self._stats,
-            "cache_size": self.cache.size(),
-            "cache_stats": self.cache.get_stats(),
+            **scanner_stats,
+            "uptime_seconds": int(uptime),
+            "aggregator_pending": self.aggregator.get_pending_count(),
         }
 
 
 async def main() -> int:
     """Main entry point."""
-    bot = PolymarketAlertBot()
+    bot = PolymarketBot()
 
-    # Setup signal handlers for graceful shutdown (Unix only)
+    # Signal handlers (Unix only)
     if sys.platform != "win32":
         loop = asyncio.get_running_loop()
 
@@ -218,13 +261,13 @@ async def main() -> int:
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, signal_handler)
 
-    # Start and run
+    # Start
     if not await bot.start():
         logger.error("Failed to start bot")
         return 1
 
     try:
-        await bot.run_forever()
+        await bot.run_scan_loop()
     except (asyncio.CancelledError, KeyboardInterrupt):
         logger.info("Bot cancelled")
     finally:

@@ -1,139 +1,138 @@
-# Polymarket Low Odds Alert Bot
+# Polymarket Smart Alert Bot
 
-A high-performance Telegram bot that monitors Polymarket for markets where any outcome has odds ≤ 0.1% (≤ $0.001), sending instant alerts.
+A powerful Telegram bot that monitors Polymarket for low odds markets, whale trades, and arbitrage opportunities. Complex analytics under the hood, clean minimal interface for the user.
 
 ## Features
 
-- **Real-time monitoring**: Scans Polymarket every 5-10 seconds
-- **Smart filtering**: Focuses on Politics, Weather, Technology, and AI markets
-- **Crypto exclusion**: Automatically filters out cryptocurrency-related markets
-- **Deduplication**: Prevents spam by tracking recently alerted markets
-- **Fast alerts**: Sub-second alert delivery via Telegram
+### Alert Types
+- **📉 Low Odds** - Markets where outcomes are below your threshold (default 1%)
+- **🐋 Whale Trades** - Large trades above $30 USD with trader profiles
+- **⚖️ Arbitrage** - Price discrepancies where YES + NO > 100%
+- **⚠️ Counter Signals** - When whales bet against low-odds outcomes
 
-## Categories Monitored
+### Smart Filtering
+- **Quality filters**: Volume, liquidity, and spread requirements
+- **Category targeting**: Politics, Weather, Technology, AI
+- **Crypto exclusion**: Automatically filters out blockchain markets
+- **Deduplication**: No spam - alerts are batched every 1-2 minutes
 
-| Category | Examples |
-|----------|----------|
-| Politics | Elections, legislation, government events |
-| Weather | Hurricanes, temperature records, climate events |
-| Technology | Product launches, company announcements |
-| AI | Model releases, AI milestones, regulations |
+### User Features
+- **📋 Watchlist** - Track specific markets
+- **👥 Trader Tracking** - Follow whale wallets
+- **⚙️ Settings** - All configuration via inline buttons
+- **📁 Export** - Download your data as CSV/JSON
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.11 or higher
-- A Telegram bot token (from [@BotFather](https://t.me/BotFather))
-- Your Telegram chat ID (from [@userinfobot](https://t.me/userinfobot))
+- Python 3.11+
+- Telegram bot token from [@BotFather](https://t.me/BotFather)
+- Your Telegram user ID from [@userinfobot](https://t.me/userinfobot)
 
 ### Setup
 
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   cd polymarket-bot
-   ```
-
-2. Create a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Create configuration:
-   ```bash
-   cp .env.example .env
-   ```
-
-5. Edit `.env` with your credentials:
-   ```env
-   TELEGRAM_BOT_TOKEN=your_bot_token_here
-   TELEGRAM_CHAT_ID=your_chat_id_here
-   ```
-
-## Usage
-
-### Running the Bot
-
 ```bash
-python -m src.main
-```
-
-Or run directly:
-```bash
+# Clone and enter directory
+git clone <repository-url>
 cd polymarket-bot
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+### Running
+
+```bash
 python -m src.main
 ```
 
-### Running with Docker (Optional)
+## Commands
 
-```bash
-docker build -t polymarket-bot .
-docker run -d --env-file .env polymarket-bot
-```
+| Command | Description |
+|---------|-------------|
+| `/start` | Start the bot |
+| `/settings` | Configure alert thresholds |
+| `/watchlist` | View tracked markets |
+| `/traders` | View tracked traders |
+| `/status` | Bot status and stats |
+| `/export` | Export your data |
+| `/help` | Show help |
 
-## Configuration Options
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TELEGRAM_BOT_TOKEN` | (required) | Your Telegram bot token |
-| `TELEGRAM_CHAT_ID` | (required) | Chat/channel ID for alerts |
-| `SCAN_INTERVAL_SECONDS` | 10 | Seconds between scans |
-| `PRICE_THRESHOLD` | 0.001 | Alert threshold (0.001 = 0.1%) |
-| `ALERT_COOLDOWN_MINUTES` | 60 | Minutes before re-alerting same market |
+| `TELEGRAM_BOT_TOKEN` | required | Bot token from BotFather |
+| `TELEGRAM_ADMIN_ID` | required | Your Telegram user ID |
+| `DEFAULT_PRICE_THRESHOLD` | 0.01 | Alert threshold (1%) |
+| `DEFAULT_MIN_VOLUME` | 1000 | Min 24h volume ($) |
+| `DEFAULT_MIN_LIQUIDITY` | 5000 | Min liquidity ($) |
+| `DEFAULT_MAX_SPREAD` | 0.03 | Max spread (3%) |
+| `DEFAULT_SCAN_INTERVAL` | 60 | Scan interval (seconds) |
+| `DEFAULT_WHALE_THRESHOLD` | 30 | Min whale trade ($) |
 
 ## Alert Format
 
 ```
-🚨 LOW ODDS ALERT
+📊 POLYMARKET ALERTS • 14:32 UTC
 
-📊 Market: Will X happen by Y date?
-💰 Outcome: Yes
-📉 Price: 0.050% ($0.0005)
-📁 Category: Politics
-🔗 Link: https://polymarket.com/event/...
+━━━━━━━━━━━━━━━━━━━━━━
 
-⏰ 2025-01-21 12:34:56 UTC
+🔴 LOW ODDS DETECTED
+
+Will X happen before Y?
+├ NO: 1.0% (was 2.3% 1h ago) ↓57%
+├ Vol: $45K | Liq: $120K | Spread: 0.8%
+├ Ends: Jan 15, 2025 (12 days)
+└ 🔗 polymarket.com/event/xxx/yyy
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+🐋 WHALE BUY • $500
+
+@trader_name 🧠 bought YES
+├ Market: "Will Z happen?"
+├ Price: $0.34 | Shares: 1,470
+├ Stats: 73% win rate (89 trades)
+├ Portfolio: $12.4K | PnL: +$2.1K
+└ 🔗 polymarket.com/event/xxx
+
+━━━━━━━━━━━━━━━━━━━━━━
+
+📈 2 alerts | Next scan: 14:34 UTC
 ```
 
 ## Architecture
 
 ```
-┌─────────────────┐
-│  Main Loop      │ ← Async, runs every 5-10 seconds
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Polymarket API  │ ← Batch fetch active markets
-│ (Gamma API)     │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Filter Engine   │ ← Category match + exclude crypto + exclude resolved
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Price Checker   │ ← Check if any outcome ≤ 0.001
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Dedup Cache     │ ← In-memory dict with TTL
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Telegram Alert  │ ← python-telegram-bot async
-└─────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                      TELEGRAM BOT                           │
+│  Commands • Callbacks • Scheduled Jobs                      │
+└─────────────────────────────────────────────────────────────┘
+                           │
+┌─────────────────────────────────────────────────────────────┐
+│                     CORE ENGINE                             │
+│  Market Scanner • Whale Tracker • Alert Aggregator          │
+└─────────────────────────────────────────────────────────────┘
+                           │
+┌─────────────────────────────────────────────────────────────┐
+│                   POLYMARKET LAYER                          │
+│  Gamma API • CLOB API • Data API                            │
+└─────────────────────────────────────────────────────────────┘
+                           │
+┌─────────────────────────────────────────────────────────────┐
+│                      DATA LAYER                             │
+│  SQLite DB • Memory Cache • Price History                   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Project Structure
@@ -141,50 +140,74 @@ docker run -d --env-file .env polymarket-bot
 ```
 polymarket-bot/
 ├── src/
-│   ├── __init__.py           # Package marker
-│   ├── main.py               # Entry point, async loop
-│   ├── polymarket_client.py  # API wrapper
-│   ├── filters.py            # Category & resolution filters
-│   ├── alert_cache.py        # Deduplication logic
-│   ├── telegram_bot.py       # Telegram integration
-│   └── config.py             # Settings & constants
-├── requirements.txt          # Dependencies
-├── .env.example              # Configuration template
-└── README.md                 # This file
+│   ├── main.py                 # Entry point
+│   ├── bot/                    # Telegram handlers
+│   │   ├── handlers.py
+│   │   ├── callbacks.py
+│   │   ├── keyboards.py
+│   │   └── formatters.py
+│   ├── polymarket/             # API clients
+│   │   ├── gamma_client.py
+│   │   ├── clob_client.py
+│   │   ├── data_client.py
+│   │   ├── models.py
+│   │   └── urls.py
+│   ├── core/                   # Business logic
+│   │   ├── scanner.py
+│   │   ├── filters.py
+│   │   ├── aggregator.py
+│   │   └── alerts.py
+│   ├── traders/                # Whale tracking
+│   │   ├── tracker.py
+│   │   ├── profiler.py
+│   │   └── smart_money.py
+│   ├── data/                   # Persistence
+│   │   ├── database.py
+│   │   └── cache.py
+│   └── utils/                  # Utilities
+│       ├── config.py
+│       └── logger.py
+├── data/                       # SQLite database
+├── requirements.txt
+├── .env.example
+└── README.md
 ```
-
-## Performance
-
-- **Full market scan**: < 5 seconds
-- **Alert delivery**: < 1 second after detection
-- **Memory usage**: < 100MB
 
 ## API References
 
-This bot uses the following Polymarket APIs:
-- **Gamma API** (`gamma-api.polymarket.com`): Market metadata, categories, resolution status
-- **CLOB API** (`clob.polymarket.com`): Real-time prices and order book data
+| API | Base URL | Purpose |
+|-----|----------|---------|
+| Gamma | `gamma-api.polymarket.com` | Markets, events, profiles |
+| CLOB | `clob.polymarket.com` | Prices, orderbook |
+| Data | `data-api.polymarket.com` | Trades, positions |
+
+## Smart Money Classification
+
+Traders are classified as "smart money" if they meet either:
+- 20+ trades with 65%+ win rate
+- $50,000+ portfolio value
+
+Smart money badges:
+- 👑 Elite (both criteria)
+- 💎 High portfolio
+- 🧠 Consistent wins
 
 ## Troubleshooting
 
-### Bot not sending alerts
+### Bot not responding
+1. Check `TELEGRAM_BOT_TOKEN` is correct
+2. Start a conversation with your bot on Telegram
+3. Check logs for errors
 
-1. Verify `TELEGRAM_BOT_TOKEN` is correct
-2. Ensure the bot has been started by messaging it on Telegram
-3. Check that `TELEGRAM_CHAT_ID` is correct (use @userinfobot)
-4. Review logs for error messages
+### No alerts
+1. Verify markets exist with low odds
+2. Check your threshold settings (`/settings`)
+3. Ensure categories are enabled
 
 ### Rate limiting
-
-The bot includes automatic retry with exponential backoff. If you're hitting rate limits frequently:
-- Increase `SCAN_INTERVAL_SECONDS`
-- The bot will automatically wait when rate limited
-
-### No markets found
-
-- Polymarket may have temporary API issues
-- Check if the API endpoints are accessible
-- The bot will continue retrying automatically
+The bot includes automatic retry with exponential backoff. If persistent:
+- Increase `DEFAULT_SCAN_INTERVAL`
+- Check API status
 
 ## License
 
