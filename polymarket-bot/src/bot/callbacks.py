@@ -20,37 +20,37 @@ from .formatters import format_settings, format_status, format_welcome
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle all callback queries from inline buttons."""
     query = update.callback_query
-
-    # Answer callback to stop loading animation
-    await query.answer()
-
     data = query.data
     user_id = update.effective_user.id
 
     # Get database from context
     db: Database = context.bot_data.get("database")
     if not db:
-        await query.message.reply_text("Database not available. Please try /start again.")
+        await query.answer("Database error", show_alert=True)
         return
 
     try:
         logger.info(f"Callback: {data} from user {user_id}")
 
         if data == "noop":
+            await query.answer()
             return
 
         elif data == "main_menu":
+            await query.answer()
             await query.edit_message_text(
                 "📊 Polymarket Alert Bot\n\nSelect an option:",
                 reply_markup=main_menu_keyboard(),
             )
 
         elif data == "settings":
+            await query.answer()
             settings = await db.get_settings(user_id)
             text = format_settings(settings)
             await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
 
         elif data == "watchlist":
+            await query.answer()
             watchlist = await db.get_watchlist(user_id)
             count = len(watchlist)
             text = f"📋 YOUR WATCHLIST ({count} markets)"
@@ -59,6 +59,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(text, reply_markup=watchlist_keyboard(watchlist))
 
         elif data == "traders":
+            await query.answer()
             traders = await db.get_tracked_traders(user_id)
             count = len(traders)
             text = f"👥 TRACKED TRADERS ({count})\n\n🧠 = Smart money (>65% win rate or >$50K)"
@@ -67,12 +68,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(text, reply_markup=traders_keyboard(traders))
 
         elif data == "status":
+            await query.answer()
             bot_instance = context.bot_data.get("bot_instance")
             stats = bot_instance.get_stats() if bot_instance else {}
             text = format_status(stats)
             await query.edit_message_text(text, reply_markup=main_menu_keyboard())
 
         elif data == "start_monitoring":
+            await query.answer()
             await query.edit_message_text(
                 "✅ Monitoring started!\n\n"
                 "You'll receive alerts when:\n"
@@ -84,6 +87,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
 
         elif data == "markets":
+            await query.answer()
             await query.edit_message_text(
                 "🔍 BROWSE MARKETS\n\n"
                 "Feature coming soon!\n\n"
@@ -119,6 +123,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         # Toggle settings
         elif data.startswith("toggle_"):
+            await query.answer()
             setting = data[7:]
             settings = await db.get_settings(user_id)
 
@@ -154,6 +159,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         # Threshold settings
         elif data.startswith("thresh_"):
+            await query.answer()
             value = float(data[7:])
             await db.update_settings(user_id, price_threshold=value)
             settings = await db.get_settings(user_id)
@@ -161,6 +167,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
 
         elif data.startswith("vol_"):
+            await query.answer()
             value = float(data[4:])
             await db.update_settings(user_id, min_volume=value)
             settings = await db.get_settings(user_id)
@@ -168,6 +175,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
 
         elif data == "reset_settings":
+            await query.answer("Settings reset!")
             await db.update_settings(
                 user_id,
                 price_threshold=0.01,
@@ -187,12 +195,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         # Watchlist actions
         elif data.startswith("wl_page_"):
+            await query.answer()
             page = int(data[8:])
             watchlist = await db.get_watchlist(user_id)
             text = f"📋 YOUR WATCHLIST ({len(watchlist)} markets)"
             await query.edit_message_text(text, reply_markup=watchlist_keyboard(watchlist, page))
 
         elif data.startswith("wl_remove_"):
+            await query.answer("Removed!")
             market_id = data[10:]
             await db.remove_from_watchlist(user_id, market_id)
             watchlist = await db.get_watchlist(user_id)
@@ -202,6 +212,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(text, reply_markup=watchlist_keyboard(watchlist))
 
         elif data == "wl_add":
+            await query.answer()
             await query.edit_message_text(
                 "🔍 To add a market:\n\n"
                 "1. Click 📌 Track on any alert\n"
@@ -211,6 +222,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
 
         elif data == "wl_muted":
+            await query.answer()
             muted = await db.get_muted_markets(user_id)
             if muted:
                 text = f"🔇 MUTED MARKETS ({len(muted)})\n\n"
@@ -221,6 +233,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         # Trader actions
         elif data.startswith("trader_remove_"):
+            await query.answer("Removed!")
             address = data[14:]
             await db.remove_tracked_trader(user_id, address)
             traders = await db.get_tracked_traders(user_id)
@@ -230,6 +243,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.edit_message_text(text, reply_markup=traders_keyboard(traders))
 
         elif data == "trader_add":
+            await query.answer()
             await query.edit_message_text(
                 "👤 To add a trader:\n\n"
                 "Send me a wallet address:\n"
@@ -240,6 +254,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
 
         elif data.startswith("trader_view_"):
+            await query.answer()
             address = data[12:]
             await query.edit_message_text(
                 f"👤 Trader: `{address[:10]}...{address[-6:]}`\n\n"
@@ -250,6 +265,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
 
         elif data.startswith("tr_page_"):
+            await query.answer()
             page = int(data[8:])
             traders = await db.get_tracked_traders(user_id)
             text = f"👥 TRACKED TRADERS ({len(traders)})"
@@ -290,6 +306,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("Export coming soon!", show_alert=True)
 
         elif data == "cancel":
+            await query.answer()
             await query.edit_message_text(
                 "Cancelled.",
                 reply_markup=main_menu_keyboard(),
