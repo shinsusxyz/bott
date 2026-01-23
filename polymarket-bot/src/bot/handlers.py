@@ -16,7 +16,7 @@ from ..data.database import Database
 from ..utils.logger import logger
 from .keyboards import start_keyboard, main_menu_keyboard, export_keyboard
 from .formatters import format_welcome, format_status, format_settings
-from .callbacks import CallbackHandler
+from .callbacks import handle_callback
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -209,8 +209,7 @@ def setup_handlers(app: Application, database: Database, bot_instance) -> None:
     app.add_handler(CommandHandler("markets", markets_command))
 
     # Callback handler
-    callback_handler = CallbackHandler(database, bot_instance)
-    app.add_handler(CallbackQueryHandler(callback_handler.handle))
+    app.add_handler(CallbackQueryHandler(handle_callback))
 
     # Text handler
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))

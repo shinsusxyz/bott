@@ -16,243 +16,285 @@ from .keyboards import (
 from .formatters import format_settings, format_status
 
 
-class CallbackHandler:
-    """Handles all callback queries from inline buttons."""
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle all callback queries from inline buttons."""
+    query = update.callback_query
 
-    def __init__(self, database: Database, bot_instance: "PolymarketBot") -> None:
-        self.db = database
-        self.bot = bot_instance
+    # Answer callback to stop loading animation
+    await query.answer()
 
-    async def handle(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Route callback to appropriate handler."""
-        query = update.callback_query
-        await query.answer()
+    data = query.data
+    user_id = update.effective_user.id
 
-        data = query.data
-        user_id = update.effective_user.id
+    # Get database from context
+    db: Database = context.bot_data.get("database")
+    if not db:
+        await query.message.reply_text("Database not available. Please try /start again.")
+        return
 
-        try:
-            if data == "noop":
-                return
+    try:
+        logger.info(f"Callback: {data} from user {user_id}")
 
-            elif data == "main_menu":
-                await self._show_main_menu(query)
-
-            elif data == "settings":
-                await self._show_settings(query, user_id)
-
-            elif data == "watchlist":
-                await self._show_watchlist(query, user_id)
-
-            elif data == "traders":
-                await self._show_traders(query, user_id)
-
-            elif data == "status":
-                await self._show_status(query)
-
-            elif data == "start_monitoring":
-                await self._start_monitoring(query, user_id)
-
-            # Category toggles
-            elif data.startswith("cat_"):
-                await self._toggle_category(query, user_id, data[4:])
-
-            elif data.startswith("toggle_"):
-                await self._toggle_setting(query, user_id, data[7:])
-
-            # Threshold settings
-            elif data.startswith("thresh_"):
-                value = float(data[7:])
-                await self._update_setting(query, user_id, "price_threshold", value)
-
-            elif data.startswith("vol_"):
-                value = float(data[4:])
-                await self._update_setting(query, user_id, "min_volume", value)
-
-            # Reset
-            elif data == "reset_settings":
-                await self._reset_settings(query, user_id)
-
-            # Watchlist actions
-            elif data.startswith("wl_"):
-                await self._handle_watchlist_action(query, user_id, data)
-
-            # Trader actions
-            elif data.startswith("trader_"):
-                await self._handle_trader_action(query, user_id, data)
-
-            # Market actions
-            elif data.startswith("mute_"):
-                market_id = data[5:]
-                await self._mute_market(query, user_id, market_id)
-
-            elif data.startswith("track_"):
-                market_id = data[6:]
-                await self._track_market(query, user_id, market_id)
-
-            else:
-                logger.warning(f"Unknown callback: {data}")
-
-        except Exception as e:
-            logger.error(f"Callback error: {e}")
-            await query.message.reply_text(f"Error: {e}")
-
-    async def _show_main_menu(self, query) -> None:
-        """Show main menu."""
-        await query.edit_message_text(
-            "📊 Polymarket Alert Bot\n\nSelect an option:",
-            reply_markup=main_menu_keyboard(),
-        )
-
-    async def _show_settings(self, query, user_id: int) -> None:
-        """Show settings menu."""
-        settings = await self.db.get_settings(user_id)
-        text = format_settings(settings)
-        await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
-
-    async def _show_watchlist(self, query, user_id: int, page: int = 0) -> None:
-        """Show watchlist."""
-        watchlist = await self.db.get_watchlist(user_id)
-        count = len(watchlist)
-        text = f"📋 YOUR WATCHLIST ({count} markets)\n\nSelect a market for details:"
-
-        if not watchlist:
-            text = "📋 YOUR WATCHLIST\n\nNo markets tracked yet.\nUse 📌 Track on any alert to add markets."
-
-        await query.edit_message_text(text, reply_markup=watchlist_keyboard(watchlist, page))
-
-    async def _show_traders(self, query, user_id: int, page: int = 0) -> None:
-        """Show tracked traders."""
-        traders = await self.db.get_tracked_traders(user_id)
-        count = len(traders)
-        text = f"👥 TRACKED TRADERS ({count})\n\n🧠 = Smart money (>65% win rate or >$50K)"
-
-        if not traders:
-            text = "👥 TRACKED TRADERS\n\nNo traders tracked yet.\nUse 👁 Track trader on whale alerts."
-
-        await query.edit_message_text(text, reply_markup=traders_keyboard(traders, page))
-
-    async def _show_status(self, query) -> None:
-        """Show bot status."""
-        stats = self.bot.get_stats() if hasattr(self.bot, 'get_stats') else {}
-        text = format_status(stats)
-        await query.edit_message_text(text, reply_markup=main_menu_keyboard())
-
-    async def _start_monitoring(self, query, user_id: int) -> None:
-        """Start monitoring for user."""
-        await query.edit_message_text(
-            "✅ Monitoring started!\n\n"
-            "You'll receive alerts when:\n"
-            "📉 Markets hit low odds threshold\n"
-            "🐋 Whales make big trades\n"
-            "⚖️ Arbitrage opportunities appear\n\n"
-            "Alerts are batched every 1-2 minutes.",
-            reply_markup=main_menu_keyboard(),
-        )
-
-    async def _toggle_category(self, query, user_id: int, category: str) -> None:
-        """Toggle a category on/off."""
-        settings = await self.db.get_settings(user_id)
-        categories = settings.get("categories", ["politics", "weather", "tech", "ai"])
-
-        if category == "all":
-            categories = ["politics", "weather", "tech", "ai"]
-        elif category in categories:
-            categories.remove(category)
-        else:
-            categories.append(category)
-
-        await self.db.update_settings(user_id, categories=categories)
-        await self._show_settings(query, user_id)
-
-    async def _toggle_setting(self, query, user_id: int, setting: str) -> None:
-        """Toggle a boolean setting."""
-        settings = await self.db.get_settings(user_id)
-
-        mapping = {
-            "politics": "categories",
-            "weather": "categories",
-            "tech": "categories",
-            "ai": "categories",
-            "whale": "whale_alerts_enabled",
-            "smart": "smart_money_only",
-            "arb": "arbitrage_alerts",
-            "counter": "counter_signals",
-        }
-
-        if setting in ["politics", "weather", "tech", "ai"]:
-            await self._toggle_category(query, user_id, setting)
+        if data == "noop":
             return
 
-        key = mapping.get(setting)
-        if key:
-            current = settings.get(key, False)
-            await self.db.update_settings(user_id, **{key: not current})
-
-        await self._show_settings(query, user_id)
-
-    async def _update_setting(self, query, user_id: int, key: str, value: float) -> None:
-        """Update a numeric setting."""
-        await self.db.update_settings(user_id, **{key: value})
-        await self._show_settings(query, user_id)
-
-    async def _reset_settings(self, query, user_id: int) -> None:
-        """Reset settings to defaults."""
-        await self.db.update_settings(
-            user_id,
-            price_threshold=0.01,
-            min_volume=1000,
-            min_liquidity=5000,
-            max_spread=0.03,
-            whale_threshold=30,
-            categories=["politics", "weather", "tech", "ai"],
-            whale_alerts_enabled=True,
-            smart_money_only=False,
-            arbitrage_alerts=True,
-            counter_signals=True,
-        )
-        await self._show_settings(query, user_id)
-
-    async def _handle_watchlist_action(self, query, user_id: int, data: str) -> None:
-        """Handle watchlist actions."""
-        if data.startswith("wl_page_"):
-            page = int(data[8:])
-            await self._show_watchlist(query, user_id, page)
-        elif data.startswith("wl_remove_"):
-            market_id = data[10:]
-            await self.db.remove_from_watchlist(user_id, market_id)
-            await self._show_watchlist(query, user_id)
-        elif data == "wl_add":
+        elif data == "main_menu":
             await query.edit_message_text(
-                "🔍 To add a market:\n\n"
-                "1. Browse markets with /markets\n"
-                "2. Click 📌 Track on any alert\n"
-                "3. Or send me a Polymarket URL",
+                "📊 Polymarket Alert Bot\n\nSelect an option:",
                 reply_markup=main_menu_keyboard(),
             )
 
-    async def _handle_trader_action(self, query, user_id: int, data: str) -> None:
-        """Handle trader actions."""
-        if data.startswith("trader_remove_"):
+        elif data == "settings":
+            settings = await db.get_settings(user_id)
+            text = format_settings(settings)
+            await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
+
+        elif data == "watchlist":
+            watchlist = await db.get_watchlist(user_id)
+            count = len(watchlist)
+            text = f"📋 YOUR WATCHLIST ({count} markets)"
+            if not watchlist:
+                text = "📋 YOUR WATCHLIST\n\nNo markets tracked yet.\nUse 📌 Track on any alert to add markets."
+            await query.edit_message_text(text, reply_markup=watchlist_keyboard(watchlist))
+
+        elif data == "traders":
+            traders = await db.get_tracked_traders(user_id)
+            count = len(traders)
+            text = f"👥 TRACKED TRADERS ({count})\n\n🧠 = Smart money (>65% win rate or >$50K)"
+            if not traders:
+                text = "👥 TRACKED TRADERS\n\nNo traders tracked yet.\nUse 👁 Track trader on whale alerts."
+            await query.edit_message_text(text, reply_markup=traders_keyboard(traders))
+
+        elif data == "status":
+            bot_instance = context.bot_data.get("bot_instance")
+            stats = bot_instance.get_stats() if bot_instance else {}
+            text = format_status(stats)
+            await query.edit_message_text(text, reply_markup=main_menu_keyboard())
+
+        elif data == "start_monitoring":
+            await query.edit_message_text(
+                "✅ Monitoring started!\n\n"
+                "You'll receive alerts when:\n"
+                "📉 Markets hit low odds threshold\n"
+                "🐋 Whales make big trades\n"
+                "⚖️ Arbitrage opportunities appear\n\n"
+                "Alerts are batched every 1-2 minutes.",
+                reply_markup=main_menu_keyboard(),
+            )
+
+        elif data == "markets":
+            await query.edit_message_text(
+                "🔍 BROWSE MARKETS\n\n"
+                "Feature coming soon!\n\n"
+                "For now, markets are discovered automatically during scans.",
+                reply_markup=main_menu_keyboard(),
+            )
+
+        # Category selection on start
+        elif data.startswith("cat_"):
+            category = data[4:]
+            settings = await db.get_settings(user_id)
+            categories = list(settings.get("categories", ["politics", "weather", "tech", "ai"]))
+
+            if category == "all":
+                categories = ["politics", "weather", "tech", "ai"]
+            elif category in categories:
+                categories.remove(category)
+            else:
+                categories.append(category)
+
+            await db.update_settings(user_id, categories=categories)
+
+            # Refresh settings view
+            settings = await db.get_settings(user_id)
+            text = format_settings(settings)
+            await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
+
+        # Toggle settings
+        elif data.startswith("toggle_"):
+            setting = data[7:]
+            settings = await db.get_settings(user_id)
+
+            if setting in ["politics", "weather", "tech", "ai"]:
+                # Category toggle
+                categories = list(settings.get("categories", ["politics", "weather", "tech", "ai"]))
+                if setting in categories:
+                    categories.remove(setting)
+                else:
+                    categories.append(setting)
+                await db.update_settings(user_id, categories=categories)
+
+            elif setting == "whale":
+                current = settings.get("whale_alerts_enabled", True)
+                await db.update_settings(user_id, whale_alerts_enabled=not current)
+
+            elif setting == "smart":
+                current = settings.get("smart_money_only", False)
+                await db.update_settings(user_id, smart_money_only=not current)
+
+            elif setting == "arb":
+                current = settings.get("arbitrage_alerts", True)
+                await db.update_settings(user_id, arbitrage_alerts=not current)
+
+            elif setting == "counter":
+                current = settings.get("counter_signals", True)
+                await db.update_settings(user_id, counter_signals=not current)
+
+            # Refresh settings
+            settings = await db.get_settings(user_id)
+            text = format_settings(settings)
+            await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
+
+        # Threshold settings
+        elif data.startswith("thresh_"):
+            value = float(data[7:])
+            await db.update_settings(user_id, price_threshold=value)
+            settings = await db.get_settings(user_id)
+            text = format_settings(settings)
+            await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
+
+        elif data.startswith("vol_"):
+            value = float(data[4:])
+            await db.update_settings(user_id, min_volume=value)
+            settings = await db.get_settings(user_id)
+            text = format_settings(settings)
+            await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
+
+        elif data == "reset_settings":
+            await db.update_settings(
+                user_id,
+                price_threshold=0.01,
+                min_volume=1000,
+                min_liquidity=5000,
+                max_spread=0.03,
+                whale_threshold=30,
+                categories=["politics", "weather", "tech", "ai"],
+                whale_alerts_enabled=True,
+                smart_money_only=False,
+                arbitrage_alerts=True,
+                counter_signals=True,
+            )
+            settings = await db.get_settings(user_id)
+            text = format_settings(settings)
+            await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
+
+        # Watchlist actions
+        elif data.startswith("wl_page_"):
+            page = int(data[8:])
+            watchlist = await db.get_watchlist(user_id)
+            text = f"📋 YOUR WATCHLIST ({len(watchlist)} markets)"
+            await query.edit_message_text(text, reply_markup=watchlist_keyboard(watchlist, page))
+
+        elif data.startswith("wl_remove_"):
+            market_id = data[10:]
+            await db.remove_from_watchlist(user_id, market_id)
+            watchlist = await db.get_watchlist(user_id)
+            text = f"📋 YOUR WATCHLIST ({len(watchlist)} markets)"
+            if not watchlist:
+                text = "📋 YOUR WATCHLIST\n\nNo markets tracked yet."
+            await query.edit_message_text(text, reply_markup=watchlist_keyboard(watchlist))
+
+        elif data == "wl_add":
+            await query.edit_message_text(
+                "🔍 To add a market:\n\n"
+                "1. Click 📌 Track on any alert\n"
+                "2. Or send me a Polymarket URL\n\n"
+                "Markets will be added to your watchlist.",
+                reply_markup=main_menu_keyboard(),
+            )
+
+        elif data == "wl_muted":
+            muted = await db.get_muted_markets(user_id)
+            if muted:
+                text = f"🔇 MUTED MARKETS ({len(muted)})\n\n"
+                text += "\n".join(f"• {m[:20]}..." for m in muted[:10])
+            else:
+                text = "🔇 No muted markets"
+            await query.edit_message_text(text, reply_markup=main_menu_keyboard())
+
+        # Trader actions
+        elif data.startswith("trader_remove_"):
             address = data[14:]
-            await self.db.remove_tracked_trader(user_id, address)
-            await self._show_traders(query, user_id)
+            await db.remove_tracked_trader(user_id, address)
+            traders = await db.get_tracked_traders(user_id)
+            text = f"👥 TRACKED TRADERS ({len(traders)})"
+            if not traders:
+                text = "👥 TRACKED TRADERS\n\nNo traders tracked yet."
+            await query.edit_message_text(text, reply_markup=traders_keyboard(traders))
+
         elif data == "trader_add":
             await query.edit_message_text(
                 "👤 To add a trader:\n\n"
                 "Send me a wallet address:\n"
-                "`0x1234...`\n\n"
+                "`0x1234...abcd`\n\n"
                 "Or click 👁 Track trader on whale alerts.",
                 reply_markup=main_menu_keyboard(),
                 parse_mode="Markdown",
             )
 
-    async def _mute_market(self, query, user_id: int, market_id: str) -> None:
-        """Mute a market."""
-        await self.db.mute_market(user_id, market_id)
-        await query.answer("Market muted for 1 hour")
+        elif data.startswith("trader_view_"):
+            address = data[12:]
+            await query.edit_message_text(
+                f"👤 Trader: `{address[:10]}...{address[-6:]}`\n\n"
+                f"🔗 https://polymarket.com/profile/{address}\n\n"
+                "Stats loading not implemented yet.",
+                reply_markup=main_menu_keyboard(),
+                parse_mode="Markdown",
+            )
 
-    async def _track_market(self, query, user_id: int, market_id: str) -> None:
-        """Track a market (add to watchlist)."""
-        # Would need market details - for now just acknowledge
-        await query.answer("Market added to watchlist")
+        elif data.startswith("tr_page_"):
+            page = int(data[8:])
+            traders = await db.get_tracked_traders(user_id)
+            text = f"👥 TRACKED TRADERS ({len(traders)})"
+            await query.edit_message_text(text, reply_markup=traders_keyboard(traders, page))
+
+        # Market actions from alerts
+        elif data.startswith("mute_"):
+            market_id = data[5:]
+            await db.mute_market(user_id, market_id)
+            await query.answer("✅ Market muted for 1 hour", show_alert=True)
+
+        elif data.startswith("track_"):
+            market_id = data[6:]
+            # Would need to fetch market details - for now just confirm
+            await query.answer("✅ Added to watchlist", show_alert=True)
+
+        elif data.startswith("track_trader_"):
+            address = data[13:]
+            await db.add_tracked_trader(user_id, address)
+            await query.answer("✅ Trader added to tracking", show_alert=True)
+
+        elif data.startswith("orderbook_"):
+            market_id = data[10:]
+            await query.answer("Orderbook view coming soon!", show_alert=True)
+
+        elif data.startswith("view_"):
+            market_id = data[5:]
+            await query.answer("Market view coming soon!", show_alert=True)
+
+        # Export actions
+        elif data == "export_csv":
+            await query.answer("CSV export coming soon!", show_alert=True)
+
+        elif data == "export_json":
+            await query.answer("JSON export coming soon!", show_alert=True)
+
+        elif data.startswith("export_"):
+            await query.answer("Export coming soon!", show_alert=True)
+
+        elif data == "cancel":
+            await query.edit_message_text(
+                "Cancelled.",
+                reply_markup=main_menu_keyboard(),
+            )
+
+        else:
+            logger.warning(f"Unknown callback: {data}")
+            await query.answer(f"Unknown action: {data}", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"Callback error for {data}: {e}", exc_info=True)
+        try:
+            await query.answer(f"Error: {str(e)[:50]}", show_alert=True)
+        except Exception:
+            pass
