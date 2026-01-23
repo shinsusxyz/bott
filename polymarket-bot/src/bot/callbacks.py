@@ -12,8 +12,9 @@ from .keyboards import (
     settings_keyboard,
     watchlist_keyboard,
     traders_keyboard,
+    start_keyboard,
 )
-from .formatters import format_settings, format_status
+from .formatters import format_settings, format_status, format_welcome
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -98,17 +99,23 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
             if category == "all":
                 categories = ["politics", "weather", "tech", "ai"]
+                msg = "✅ All categories enabled"
             elif category in categories:
                 categories.remove(category)
+                msg = f"❌ {category.title()} disabled"
             else:
                 categories.append(category)
+                msg = f"✅ {category.title()} enabled"
 
             await db.update_settings(user_id, categories=categories)
 
-            # Refresh settings view
-            settings = await db.get_settings(user_id)
-            text = format_settings(settings)
-            await query.edit_message_text(text, reply_markup=settings_keyboard(settings))
+            # Show popup and stay on start menu
+            await query.answer(msg, show_alert=False)
+
+            # Update welcome text to show selected categories
+            cat_list = ", ".join(c.title() for c in categories) if categories else "None"
+            welcome_text = format_welcome() + f"\n\n📁 Selected: {cat_list}"
+            await query.edit_message_text(welcome_text, reply_markup=start_keyboard())
 
         # Toggle settings
         elif data.startswith("toggle_"):
